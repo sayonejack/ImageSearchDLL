@@ -25,7 +25,7 @@ Dự án này cung cấp một UDF (User Defined Function) và hai phiên bản 
 
 Dự án cung cấp hai phiên bản DLL để đáp ứng các nhu cầu khác nhau:
 
-### **1\. ImageSearch\_x86.dll ImageSearch\_x64.dll (Phiên bản Hiện đại)**
+### **1. ImageSearch_x86.dll ImageSearch_x64.dll (Phiên bản Hiện đại)**
 (Được đính kèm trong cùng thư mục UDF - Vì tệp DLL hỗ trợ AVX2 có kích thước lớn nên không phù hợp để nhúng vào tập lệnh)
 
 Đây là phiên bản được khuyến nghị cho hầu hết người dùng.
@@ -35,9 +35,9 @@ Dự án cung cấp hai phiên bản DLL để đáp ứng các nhu cầu khác 
   * Được xây dựng bằng C++ hiện đại, đảm bảo tính ổn định và hiệu quả.  
 * **Hạn chế:**  
   * Không tương thích với Windows XP.  
-* **Sử dụng khi:** Bạn cần hiệu suất tối đa trên các hệ điều hành Windows 7, 8, 10, 11\.
+* **Sử dụng khi:** Bạn cần hiệu suất tối đa trên các hệ điều hành Windows 7, 8, 10, 11.
 
-### **2\. ImageSearch\_xp.dll (Phiên bản Tương thích \- Legacy)**
+### **2. ImageSearch_xp.dll (Phiên bản Tương thích - Legacy)**
 (Đã được nhúng trong mã UDF)
 Phiên bản này được tạo ra để đảm bảo khả năng tương thích ngược.
 
@@ -49,29 +49,29 @@ Phiên bản này được tạo ra để đảm bảo khả năng tương thíc
 
 ## **⚙️ Cơ Chế Hoạt Động Của UDF**
 
-Tệp ImageSearch\_UDF.au3 sử dụng cơ chế nạp DLL "lai" (hybrid) rất thông minh:
+Tệp ImageSearch_UDF.au3 sử dụng cơ chế nạp DLL "lai" (hybrid) rất thông minh:
 
-1. **Ưu tiên DLL bên ngoài:** Khi hàm \_ImageSearch được gọi, UDF sẽ tìm tệp ImageSearch\_x86.dll hoặc ImageSearch\_x64.dll trong cùng thư mục với script (@ScriptDir). Nếu tìm thấy, nó sẽ sử dụng tệp này để có được hiệu suất tốt nhất (với AVX2 nếu có thể).  
+1. **Ưu tiên DLL bên ngoài:** Khi hàm _ImageSearch được gọi, UDF sẽ tìm tệp ImageSearch_x86.dll hoặc ImageSearch_x64.dll trong cùng thư mục với script (@ScriptDir). Nếu tìm thấy, nó sẽ sử dụng tệp này để có được hiệu suất tốt nhất (với AVX2 nếu có thể).  
 2. **Dự phòng DLL nhúng:** Nếu không tìm thấy tệp DLL bên ngoài, UDF sẽ tự động giải nén và sử dụng một phiên bản DLL **tương thích (legacy, không AVX2)** đã được nhúng sẵn bên trong nó dưới dạng chuỗi hex.
 
-➡️ **Điều này đảm bảo rằng script của bạn luôn có thể chạy được**, ngay cả khi bạn quên sao chép tệp DLL, nhưng để đạt tốc độ cao nhất, hãy luôn đặt ImageSearch\_x86.dll và ImageSearch\_x64.dll (phiên bản hiện đại) bên cạnh script của bạn.
+➡️ **Điều này đảm bảo rằng script của bạn luôn có thể chạy được**, ngay cả khi bạn quên sao chép tệp DLL, nhưng để đạt tốc độ cao nhất, hãy luôn đặt ImageSearch_x86.dll và ImageSearch_x64.dll (phiên bản hiện đại) bên cạnh script của bạn.
 
 ## **📦 Cài Đặt**
 
-1. **Đặt tệp DLL:** Sao chép ImageSearch\_x86.dll và ImageSearch\_x64.dll (phiên bản hiện đại) vào cùng thư mục với tệp script AutoIt của bạn. Nếu dùng trên Windows XP, Dll đã được tích hợp trong mã UDF (KHÔNG CẦN SAO CHÉP DLL).  
-2. **Thêm UDF vào script:** Sử dụng dòng lệnh \#include \<ImageSearch\_UDF.au3\> trong script của bạn.
+1. **Đặt tệp DLL:** Sao chép ImageSearch_x86.dll và ImageSearch_x64.dll (phiên bản hiện đại) vào cùng thư mục với tệp script AutoIt của bạn. Nếu dùng trên Windows XP, Dll đã được tích hợp trong mã UDF (KHÔNG CẦN SAO CHÉP DLL).  
+2. **Thêm UDF vào script:** Sử dụng dòng lệnh #include <ImageSearch_UDF.au3> trong script của bạn.
 
 ## **📖 Hướng Dẫn Sử Dụng (API)**
 
 Hàm chính để thực hiện việc tìm kiếm hình ảnh.
 
-### **\_ImageSearch($sImageFile, \[$iLeft \= 0\], \[$iTop \= 0\], \[$iRight \= 0\], \[$iBottom \= 0\], \[$iTolerance \= 10\], \[$iTransparent \= 0xFFFFFFFF\], \[$iMultiResults \= 0\], \[$iCenterPOS \= 1\], \[$iReturnDebug \= 0\], \[$fMinScale \= 1.0\], \[$fMaxScale \= 1.0\], \[$fScaleStep \= 0.1\], \[$iFindAllOccurrences \= 0\])**
+### **_ImageSearch($sImageFile, [$iLeft = 0], [$iTop = 0], [$iRight = 0], [$iBottom = 0], [$iTolerance = 10], [$iTransparent = 0xFFFFFFFF], [$iMultiResults = 0], [$iCenterPOS = 1], [$iReturnDebug = 0], [$fMinScale = 1.0], [$fMaxScale = 1.0], [$fScaleStep = 0.1], [$iFindAllOccurrences = 0])**
 
 **Các Tham Số**
 
 | Tham số | Kiểu | Mặc định | Mô tả |
 | :---- | :---- | :---- | :---- |
-| $sImageFile | String | \- | Đường dẫn đến tệp ảnh. Để tìm nhiều ảnh, phân tách bằng dấu \` |
+| $sImageFile | String | - | Đường dẫn đến tệp ảnh. Để tìm nhiều ảnh, phân tách bằng dấu ` |
 | $iLeft | Int | 0 | Tọa độ trái của vùng tìm kiếm. 0 mặc định là toàn màn hình. |
 | $iTop | Int | 0 | Tọa độ trên của vùng tìm kiếm. 0 mặc định là toàn màn hình. |
 | $iRight | Int | 0 | Tọa độ phải của vùng tìm kiếm. 0 mặc định là toàn màn hình. |
@@ -81,21 +81,21 @@ Hàm chính để thực hiện việc tìm kiếm hình ảnh.
 | $iMultiResults | Int | 0 | Số lượng kết quả tối đa cần trả về. 0 có nghĩa là không giới hạn. |
 | $iCenterPOS | Bool | 1 (True) | Nếu True, tọa độ X/Y trả về sẽ là tâm của ảnh. Nếu False, sẽ là góc trên bên trái. |
 | $iReturnDebug | Bool | 0 (False) | Nếu True, hàm sẽ trả về một chuỗi thông tin gỡ lỗi thay vì mảng kết quả. |
-| $fMinScale | Float | 1.0 | Tỷ lệ nhỏ nhất để tìm kiếm (ví dụ: 0.8 cho 80%). Phải \>= 0.1. |
+| $fMinScale | Float | 1.0 | Tỷ lệ nhỏ nhất để tìm kiếm (ví dụ: 0.8 cho 80%). Phải >= 0.1. |
 | $fMaxScale | Float | 1.0 | Tỷ lệ lớn nhất để tìm kiếm (ví dụ: 1.2 cho 120%). |
-| $fScaleStep | Float | 0.1 | Bước nhảy tỷ lệ khi tìm kiếm giữa min và max. Phải \>= 0.01. |
+| $fScaleStep | Float | 0.1 | Bước nhảy tỷ lệ khi tìm kiếm giữa min và max. Phải >= 0.01. |
 | $iFindAllOccurrences | Bool | 0 (False) | Nếu False, dừng tìm kiếm sau khi có kết quả đầu tiên. Nếu True, tìm tất cả các kết quả có thể có. |
 
 **Giá Trị Trả Về**
 
 * **Thành công:** Trả về một mảng 2D chứa tọa độ của các ảnh tìm thấy.  
-  * $aResult\[0\]\[0\] \= Số lượng kết quả tìm thấy.  
-  * $aResult\[1\] đến $aResult\[$aResult\[0\]\[0\]\] \= Một mảng cho mỗi kết quả.  
-  * $aResult\[$i\]\[0\] \= Tọa độ X  
-  * $aResult\[$i\]\[1\] \= Tọa độ Y  
-  * $aResult\[$i\]\[2\] \= Chiều rộng của ảnh tìm thấy  
-  * $aResult\[$i\]\[3\] \= Chiều cao của ảnh tìm thấy  
-* **Thất bại / Không tìm thấy:** Thiết lập @error thành 1 và trả về 0\.  
+  * $aResult[0][0] = Số lượng kết quả tìm thấy.  
+  * $aResult[1] đến $aResult[$aResult[0][0]] = Một mảng cho mỗi kết quả.  
+  * $aResult[$i][0] = Tọa độ X  
+  * $aResult[$i][1] = Tọa độ Y  
+  * $aResult[$i][2] = Chiều rộng của ảnh tìm thấy  
+  * $aResult[$i][3] = Chiều cao của ảnh tìm thấy  
+* **Thất bại / Không tìm thấy:** Thiết lập @error thành 1 và trả về 0.  
 * **Chế độ Debug:** Nếu $iReturnDebug là True, trả về một chuỗi chứa thông tin chi tiết về lần tìm kiếm cuối cùng.
 
 ## **💻 Ví Dụ**
@@ -104,42 +104,42 @@ Hàm chính để thực hiện việc tìm kiếm hình ảnh.
 
 Tìm sự xuất hiện đầu tiên của button.png trên màn hình.
 ```
-\#include \<ImageSearch\_UDF.au3\>
+#include <ImageSearch_UDF.au3>
 
-Local $aResult \= \_ImageSearch("C:\\images\\button.png")
+Local $aResult = _ImageSearch("C:imagesbutton.png")
 
 If @error Then  
-    MsgBox(48, "Lỗi", "Không tìm thấy hình ảnh trên màn hình.")  
+    MsgBox(48, "Error", "Image not found on screen.")  
 Else  
-    Local $iCount \= $aResult\[0\]\[0\]  
-    Local $iX \= $aResult\[1\]\[0\]  
-    Local $iY \= $aResult\[1\]\[1\]  
-    MsgBox(64, "Thành công", "Tìm thấy " & $iCount & " ảnh. Vị trí đầu tiên tại: " & $iX & ", " & $iY)  
-    MouseMove($iX, $iY, 20\) ; Di chuyển chuột đến tâm của ảnh  
+    Local $iCount = $aResult[0][0]  
+    Local $iX = $aResult[1][0]  
+    Local $iY = $aResult[1][1]  
+    MsgBox(64, "Success", "Found " & $iCount & " image(s). First match is at: " & $iX & ", " & $iY)  
+    MouseMove($iX, $iY, 20) ; Move mouse to the center of the found image  
 EndIf
 ```
 ### **Ví dụ 2: Tìm kiếm nâng cao (Đa ảnh, dung sai, tỷ lệ)**
 
 Tìm icon1.png hoặc icon2.png trong một vùng cụ thể, với dung sai 20 và tỷ lệ từ 90% đến 110%. Tìm tất cả các kết quả.
 ```
-\#include \<ImageSearch\_UDF.au3\>
+#include <ImageSearch_UDF.au3>
 
-Local $sImages \= "icon1.png|icon2.png"  
-Local $iTolerance \= 20  
-Local $fMinScale \= 0.9  
-Local $fMaxScale \= 1.1  
-Local $fStep \= 0.05
+Local $sImages = "icon1.png|icon2.png"  
+Local $iTolerance = 20  
+Local $fMinScale = 0.9  
+Local $fMaxScale = 1.1  
+Local $fStep = 0.05
 
-Local $aResult \= \_ImageSearch($sImages, 500, 300, 1200, 800, $iTolerance, 0xFFFFFFFF, 0, True, False, $fMinScale, $fMaxScale, $fStep, True)
+Local $aResult = _ImageSearch($sImages, 500, 300, 1200, 800, $iTolerance, 0xFFFFFFFF, 0, True, False, $fMinScale, $fMaxScale, $fStep, True)
 
 If @error Then  
-    MsgBox(48, "Lỗi", "Không tìm thấy ảnh nào trong vùng chỉ định.")  
+    MsgBox(48, "Error", "No matching images found in the specified region.")  
 Else  
-    Local $iCount \= $aResult\[0\]\[0\]  
-    ConsoleWrite("Tìm thấy tổng cộng " & $iCount & " kết quả." & @CRLF)
+    Local $iCount = $aResult[0][0]  
+    ConsoleWrite("Found " & $iCount & " total matches." & @CRLF)
 
-    For $i \= 1 To $iCount  
-        ConsoleWrite("Kết quả \#" & $i & ": X=" & $aResult\[$i\]\[0\] & ", Y=" & $aResult\[$i\]\[1\] & ", W=" & $aResult\[$i\]\[2\] & ", H=" & $aResult\[$i\]\[3\] & @CRLF)  
+    For $i = 1 To $iCount  
+        ConsoleWrite("Match #" & $i & ": X=" & $aResult[$i][0] & ", Y=" & $aResult[$i][1] & ", W=" & $aResult[$i][2] & ", H=" & $aResult[$i][3] & @CRLF)  
     Next  
 EndIf
 ```
@@ -147,15 +147,13 @@ EndIf
 
 Để chẩn đoán sự cố, hãy sử dụng tham số $iReturnDebug.
 ```
-\#include \<ImageSearch\_UDF.au3\>
+#include <ImageSearch_UDF.au3>
 
-Local $sDebugInfo \= \_ImageSearch("image\_not\_exist.png", 0, 0, 0, 0, 10, 0xFFFFFFFF, 0, True, True)
-
-; Giá trị trả về bây giờ là một chuỗi  
-ConsoleWrite($sDebugInfo & @CRLF)  
-; Ví dụ output: {0}\[No Match Found\] | DEBUG: File=image\_not\_exist.png, Rect=(0,0,1920,1080), Tol=10, Trans=0xffffffff, Multi=0, Center=1, FindAll=0, AVX2=true, Scale=(1.00,1.00,0.10)
+Local $2dDLLResult = _ImageSearch("image_not_exist.png", 0, 0, 0, 0, 10, 0xFFFFFFFF, 0, True, True)
+ConsoleWrite(">> DLL Return: " & $g_sLastDllReturn & @CRLF)
+; Ví dụ output: {0}[No Match Found] | DEBUG: File=image_not_exist.png, Rect=(0,0,1920,1080), Tol=10, Trans=0xffffffff, Multi=0, Center=1, FindAll=0, AVX2=true, Scale=(1.00,1.00,0.10)
 ```
 
 ## **Tác giả**
 
-* **Tác giả:** Đào Văn Trong \- TRONG.PRO  
+* **Tác giả:** Đào Văn Trong - TRONG.PRO  
