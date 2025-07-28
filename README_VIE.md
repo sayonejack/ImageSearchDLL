@@ -106,7 +106,7 @@ Tìm sự xuất hiện đầu tiên của button.png trên màn hình.
 ```
 #include <ImageSearch_UDF.au3>
 
-Local $aResult = _ImageSearch("C:imagesbutton.png")
+Local $aResult = _ImageSearch("C:\images\button.png")
 
 If @error Then  
     MsgBox(48, "Error", "Image not found on screen.")  
