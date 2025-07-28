@@ -63,9 +63,9 @@ The ImageSearch_UDF.au3 file uses a very smart "hybrid" DLL loading mechanism:
 ## **📖 API Reference**
 
 The main function for performing an image search.
-
-### **_ImageSearch($sImageFile, [$iLeft = 0], [$iTop = 0], [$iRight = 0], [$iBottom = 0], [$iTolerance = 10], [$iTransparent = 0xFFFFFFFF], [$iMultiResults = 0], [$iCenterPOS = 1], [$iReturnDebug = 0], [$fMinScale = 1.0], [$fMaxScale = 1.0], [$fScaleStep = 0.1], [$iFindAllOccurrences = 0])**
-
+```
+_ImageSearch($sImageFile, [$iLeft = 0], [$iTop = 0], [$iRight = 0], [$iBottom = 0], [$iTolerance = 10], [$iTransparent = 0xFFFFFFFF], [$iMultiResults = 0], [$iCenterPOS = 1], [$iReturnDebug = 0], [$fMinScale = 1.0], [$fMaxScale = 1.0], [$fScaleStep = 0.1], [$iFindAllOccurrences = 0])**
+```
 **Parameters**
 
 | Parameter | Type | Default | Description |

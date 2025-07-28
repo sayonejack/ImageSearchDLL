@@ -64,9 +64,9 @@ Tệp ImageSearch_UDF.au3 sử dụng cơ chế nạp DLL "lai" (hybrid) rất t
 ## **📖 Hướng Dẫn Sử Dụng (API)**
 
 Hàm chính để thực hiện việc tìm kiếm hình ảnh.
-
-### **_ImageSearch($sImageFile, [$iLeft = 0], [$iTop = 0], [$iRight = 0], [$iBottom = 0], [$iTolerance = 10], [$iTransparent = 0xFFFFFFFF], [$iMultiResults = 0], [$iCenterPOS = 1], [$iReturnDebug = 0], [$fMinScale = 1.0], [$fMaxScale = 1.0], [$fScaleStep = 0.1], [$iFindAllOccurrences = 0])**
-
+```
+_ImageSearch($sImageFile, [$iLeft = 0], [$iTop = 0], [$iRight = 0], [$iBottom = 0], [$iTolerance = 10], [$iTransparent = 0xFFFFFFFF], [$iMultiResults = 0], [$iCenterPOS = 1], [$iReturnDebug = 0], [$fMinScale = 1.0], [$fMaxScale = 1.0], [$fScaleStep = 0.1], [$iFindAllOccurrences = 0])**
+```
 **Các Tham Số**
 
 | Tham số | Kiểu | Mặc định | Mô tả |
