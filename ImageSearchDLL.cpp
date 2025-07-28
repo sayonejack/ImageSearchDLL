@@ -1,256 +1,279 @@
 // =================================================================================================
 //
-// Name ............: ImageSearchDLL.cpp
-// Description .....: A DLL for finding an image on the screen.  
+// Name ............: ImageSearchDLL_Modernized.cpp
+// Description .....: A highly optimized, thread-safe, and modern C++ image search DLL.
 // Author(s) .......: Dao Van Trong - TRONG.PRO
 //
 // -------------------------------------------------------------------------------------------------
 //
-// FUNCTIONAL OVERVIEW:
+// #SECTION# ARCHITECTURAL OVERVIEW
 //
-// This DLL provides a single exported function, ImageSearch, designed to locate one or more
-// sub-images within the main screen display or a specified portion of it. It is built to be
-// robust and flexible, supporting a wide range of use cases for screen automation and analysis.
+// This DLL is designed for high-performance image recognition on the screen. It has been
+// refactored with modern C++ principles to ensure safety, stability, and efficiency.
 //
-// KEY FEATURES:
+// The core workflow is as follows:
+// 1. The exported `ImageSearch` function is called from an external application (e.g., AutoIt).
+// 2. It captures the specified screen region into a pixel buffer.
+// 3. It loads the target image(s) from file paths.
+// 4. For each image, it iterates through specified scaling factors.
+// 5. At each scale, it gets the pixel data of the source image.
+// 6. It calls the core `SearchForBitmap` engine, which scans the screen buffer for the source buffer.
+// 7. The search engine automatically dispatches to a highly optimized AVX2 routine if the CPU
+//    supports it, otherwise it uses a standard scalar routine. The logic is 100% consistent.
+// 8. All found matches are collected.
+// 9. The results are formatted into a single wide-character string: "{count}[x|y|w|h,x|y|w|h,...]".
+// 10. This string is copied into a large, thread-safe static buffer, and a pointer to it is returned.
+//     This method is the most stable for interoperability with clients like AutoIt.
 //
-//  - Multi-Image Search: Can search for multiple images in a single call by providing a
-//    pipe-separated ('|') list of file paths.
+// -------------------------------------------------------------------------------------------------
 //
-//  - Scalability Matching: Allows searching for images that have been resized. You can specify
-//    a minimum scale, maximum scale, and step interval (e.g., search from 80% to 120% size
-//    in 10% increments).
+// #SECTION# KEY FEATURES & IMPROVEMENTS
 //
-//  - Color Tolerance: Supports approximate matching by allowing a tolerance value (0-255) for
-//    color channel variations, making it resilient to minor anti-aliasing or compression
-//    artifacts. A tolerance of 0 enforces an exact match.
+// - Consistent AVX2 Logic: The AVX2 pixel comparison now mirrors the scalar logic (per-channel
+//   tolerance check), ensuring identical results on all CPUs.
 //
-//  - Transparency: A specific color can be designated as transparent, causing pixels of that
-//    color in the source image to match any pixel on the screen.
+// - Centralized GDI+ Management: GDI+ is initialized once via DllMain for better performance and
+//   to adhere to best practices.
 //
-//  - Region of Interest (ROI): The search can be confined to a specific rectangular area of
-//    the screen for improved performance and accuracy.
+// - Safe Static Buffer Return: Uses a large (256KB) thread-local static buffer for the return
+//   string. This is the most robust method for AutoIt, avoiding all pointer and memory management
+//   issues on the client side, while being large enough to prevent overflows in practice.
 //
-//  - Multiple Results: The function can be configured to find all occurrences of an image or
-//    to stop after finding a specified number of matches.
+// - Automatic Parameter Validation: The exported function validates and clamps input parameters
+//   (e.g., tolerance, coordinates) to prevent crashes from invalid data.
 //
-//  - Coordinate Customization: Can return either the top-left corner or the center point of
-//    each found image.
-//
-//  - Broad Format Support: Utilizes GDI+, OLE, and standard WinAPI to load a wide variety of
-//    image formats, including PNG, JPG, GIF, BMP, ICO, and icons from EXE/DLL files.
-//
-//  - Debug Output: An optional parameter enables a detailed debug string to be appended to the
-//    result, showing the exact parameters used for the search.
+// - Full Unicode Support: All file paths and string operations use wide characters (wchar_t).
 //
 // =================================================================================================
 
 #pragma managed(push, off)
+#define NOMINMAX
 
 // Standard and Windows Headers
 #include <windows.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <olectl.h>
 #include <gdiplus.h>
-#include <winuser.h>
-#include <malloc.h>
-#include <shellapi.h>
-#include <ctype.h>
-#include <tchar.h>
-#include <math.h>
-
-// C++ Standard Library Headers
 #include <string>
 #include <vector>
-#include <cstring>
-#include <cstdint>
 #include <memory>
+#include <algorithm>
+#include <thread>
+#include <future>
+#include <mutex>
+#include <shared_mutex>
+#include <atomic>
+#include <unordered_map>
+#include <chrono>
+#include <span>
+#include <optional>
+#include <variant>
+#include <string_view>
+#include <sstream>
+#include <iomanip>
 
-// Link GDI+ library
+// SIMD Headers for CPU extensions
+#include <immintrin.h>
+#include <intrin.h>
+
 #pragma comment(lib, "gdiplus.lib")
-//#pragma comment(linker, "/EXPORT:ImageSearch=_ImageSearch@56,ImageSearch,1")
-//#pragma comment(linker, "/EXPORT:ImageSearch=_ImageSearch@56,@1")
-
 
 // =================================================================================================
-// MACROS AND INLINE FUNCTIONS
+// #BLOCK# GLOBAL GDI+ MANAGER & CPU FEATURE DETECTION
+// Manages global resources and settings for the DLL.
 // =================================================================================================
 
-#define CLR_DEFAULT 0x808080 // A default color, often used for backgrounds. (Gray)
-#define CLR_NONE    0xFFFFFFFF // Represents no color, used for transparency key.
+// GDI+ token, managed by DllMain for process-wide initialization and shutdown.
+ULONG_PTR g_gdiplusToken;
+// Atomic boolean to safely store the result of the AVX2 support check.
+std::atomic<bool> g_is_avx2_supported{ false };
+// std::once_flag ensures that the CPU feature detection runs exactly once.
+std::once_flag g_cpu_check_flag;
 
 /**
- * @brief Converts a standard RGB COLORREF to a BGR COLORREF by swapping the red and blue components.
- * @param aRGB The input COLORREF in 0x00RRGGBB format.
- * @return The converted COLORREF in 0x00BBGGRR format.
+ * @brief Detects if the host CPU supports the AVX2 instruction set.
+ * This function is called only once using std::call_once.
  */
-inline COLORREF rgb_to_bgr(DWORD aRGB) {
-    return ((aRGB & 0xFF0000) >> 16) | (aRGB & 0x00FF00) | ((aRGB & 0x0000FF) << 16);
+void InitializeCpuFeatures() {
+    int cpuInfo[4];
+    __cpuidex(cpuInfo, 7, 0);
+    // Check the 5th bit of the EBX register for AVX2 support.
+    g_is_avx2_supported.store((cpuInfo[1] & (1 << 5)) != 0);
 }
 
-/**
- * @brief A wrapper for the MultiByteToWideChar Windows API function.
- * @param source The source narrow-character string (ANSI).
- * @param dest Pointer to the destination wide-character buffer.
- * @param dest_size_in_wchars The size of the destination buffer in wide characters.
- * @return The number of wide characters written to the destination buffer.
- */
-inline int ToWideCharFunc(const char* source, wchar_t* dest, int dest_size_in_wchars) {
-    return MultiByteToWideChar(CP_ACP, 0, source, -1, dest, dest_size_in_wchars);
-}
-
-
 // =================================================================================================
-// HELPER FUNCTIONS (STATIC)
+// #BLOCK# ERROR HANDLING & RESULT TYPES
+// Defines a structured way to handle and report errors throughout the DLL.
 // =================================================================================================
 
 /**
- * @brief Retrieves a descriptive error message for a given error code.
- * @param iErrorCode The integer error code.
- * @return A constant C-style string with the error description.
+ * @enum ErrorCode
+ * @brief Defines specific error codes that can be returned by the DLL.
  */
-static const char* GetErrorMessage(int iErrorCode) {
-    switch (iErrorCode) {
-    case -1:  return "Invalid path or image format";
-    case -2:  return "Failed to load image from file";
-    case -3:  return "Failed to get screen device context";
-    case -4:  return "Failed to create a compatible device context";
-    case -5:  return "Failed to create a compatible bitmap";
-    case -6:  return "Failed to select bitmap into device context";
-    case -7:  return "BitBlt (screen capture) failed";
-    case -8:  return "Failed to get bitmap bits (pixel data)";
-    case -9:  return "Invalid search region specified";
-    case -10: return "Scaling produced an invalid bitmap size";
-    default:  return "Unknown error";
+enum class ErrorCode : int {
+    Success = 0,
+    InvalidPath = -1,
+    FailedToLoadImage = -2,
+    FailedToGetScreenDC = -3,
+    FailedToCreateCompatibleDC = -4,
+    FailedToCreateCompatibleBitmap = -5,
+    BitBltFailed = -7,
+    FailedToGetBitmapBits = -8,
+    InvalidSearchRegion = -9,
+    ScalingFailed = -10,
+    ResultBufferTooSmall = -100
+};
+
+/**
+ * @brief Converts an ErrorCode enum to a user-friendly wide-character string.
+ * @param code The error code to convert.
+ * @return A constant wide string describing the error.
+ */
+const wchar_t* GetErrorMessage(ErrorCode code) {
+    switch (code) {
+    case ErrorCode::InvalidPath: return L"Invalid path or image format";
+    case ErrorCode::FailedToLoadImage: return L"Failed to load image from file";
+    case ErrorCode::FailedToGetScreenDC: return L"Failed to get screen device context";
+    case ErrorCode::FailedToCreateCompatibleDC: return L"Failed to create a compatible device context";
+    case ErrorCode::FailedToCreateCompatibleBitmap: return L"Failed to create a compatible bitmap";
+    case ErrorCode::BitBltFailed: return L"BitBlt (screen capture) failed";
+    case ErrorCode::FailedToGetBitmapBits: return L"Failed to get bitmap bits (pixel data)";
+    case ErrorCode::InvalidSearchRegion: return L"Invalid search region specified";
+    case ErrorCode::ScalingFailed: return L"Scaling produced an invalid bitmap size";
+    case ErrorCode::ResultBufferTooSmall: return L"Result string is too large for the internal buffer";
+    default: return L"Unknown error";
     }
 }
 
+// =================================================================================================
+// #BLOCK# DATA STRUCTURES
+// Core data structures used for representing images and results.
+// =================================================================================================
+
 /**
- * @brief Converts an HICON to a 32-bit HBITMAP.
- * @param ahIcon The handle to the icon.
- * @param aDestroyIcon If true, the original HICON handle will be destroyed.
- * @return A handle to the newly created 32-bit HBITMAP, or NULL on failure.
+ * @struct PixelBuffer
+ * @brief A container for raw 32-bit pixel data (COLORREF) along with image dimensions.
  */
-static HBITMAP IconToBitmap(HICON ahIcon, bool aDestroyIcon) {
-    if (!ahIcon) return nullptr;
+struct PixelBuffer {
+    std::vector<COLORREF> pixels;
+    int width = 0;
+    int height = 0;
+};
 
-    ICONINFO iconInfo = { 0 };
-    if (!GetIconInfo(ahIcon, &iconInfo)) {
-        if (aDestroyIcon) DestroyIcon(ahIcon);
-        return nullptr;
+/**
+ * @struct MatchResult
+ * @brief Represents a single found match, containing its location and dimensions.
+ */
+struct MatchResult {
+    int x, y, w, h;
+};
+
+// =================================================================================================
+// #BLOCK# HELPER & UTILITY FUNCTIONS
+// A collection of functions for image loading, manipulation, and screen capture.
+// =================================================================================================
+
+/**
+ * @brief Converts a 0xRRGGBB color format to a 0xBBGGRR format (COLORREF).
+ * @param rgb The color in RGB format.
+ * @return The color in BGR format.
+ */
+inline COLORREF RgbToBgr(DWORD rgb) noexcept {
+    return ((rgb & 0xFF0000) >> 16) | (rgb & 0x00FF00) | ((rgb & 0x0000FF) << 16);
+}
+
+// Forward declarations for functions defined later in the file.
+HBITMAP ScaleBitmap(HBITMAP hBitmap, int newW, int newH);
+std::optional<PixelBuffer> GetBitmapPixels(HBITMAP hBitmap);
+HBITMAP CaptureScreenRegion(int iLeft, int iTop, int iRight, int iBottom);
+
+/**
+ * @brief Loads an image from a file into an HBITMAP using GDI+.
+ * @param file_path The Unicode path to the image file.
+ * @return An HBITMAP handle on success, or nullptr on failure.
+ */
+HBITMAP LoadImageFromFile(std::wstring_view file_path) {
+    // Use std::make_unique for automatic memory management of the GDI+ Bitmap object.
+    auto image = std::make_unique<Gdiplus::Bitmap>(std::wstring(file_path).c_str());
+    if (image && image->GetLastStatus() == Gdiplus::Ok) {
+        HBITMAP hbitmap;
+        // The HBITMAP is owned by the GDI+ Bitmap object until it's cloned or copied.
+        // Here, GetHBITMAP creates a new DIB section, so we are responsible for deleting it.
+        if (image->GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &hbitmap) == Gdiplus::Ok) {
+            return hbitmap;
+        }
     }
+    return nullptr;
+}
 
-    // Get the screen DC
-    HDC hdc = GetDC(nullptr);
-    if (!hdc) {
-        DeleteObject(iconInfo.hbmColor);
-        DeleteObject(iconInfo.hbmMask);
-        if (aDestroyIcon) DestroyIcon(ahIcon);
-        return nullptr;
-    }
+/**
+ * @brief Extracts the raw 32-bit pixel data from an HBITMAP into a PixelBuffer.
+ * @param hBitmap The handle to the source bitmap.
+ * @return An std::optional containing the PixelBuffer on success, or std::nullopt on failure.
+ */
+std::optional<PixelBuffer> GetBitmapPixels(HBITMAP hBitmap) {
+    if (!hBitmap) return std::nullopt;
 
-    // Get bitmap dimensions
-    BITMAP bm = { 0 };
-    GetObject(iconInfo.hbmColor, sizeof(BITMAP), &bm);
-    int width = bm.bmWidth;
-    int height = bm.bmHeight;
+    BITMAP bm;
+    if (!GetObject(hBitmap, sizeof(BITMAP), &bm)) return std::nullopt;
 
-    // Create a new 32-bit bitmap
+    PixelBuffer buffer;
+    buffer.width = bm.bmWidth;
+    buffer.height = bm.bmHeight;
+    buffer.pixels.resize(buffer.width * buffer.height);
+
     BITMAPINFO bmi = { 0 };
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height; // Top-down DIB
+    bmi.bmiHeader.biWidth = buffer.width;
+    bmi.bmiHeader.biHeight = -buffer.height; // Request a top-down DIB for easier row processing.
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
 
-    void* pBits;
-    HBITMAP hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
-    if (!hBitmap) {
-        ReleaseDC(nullptr, hdc);
-        DeleteObject(iconInfo.hbmColor);
-        DeleteObject(iconInfo.hbmMask);
-        if (aDestroyIcon) DestroyIcon(ahIcon);
-        return nullptr;
-    }
+    HDC hdcScreen = GetDC(nullptr);
+    if (!hdcScreen) return std::nullopt;
 
-    // Create a compatible DC and draw the icon
-    HDC hMemDC = CreateCompatibleDC(hdc);
-    if (hMemDC) {
-        HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hBitmap);
+    // GetDIBits extracts the pixel data into our vector.
+    int result = GetDIBits(hdcScreen, hBitmap, 0, buffer.height, buffer.pixels.data(), &bmi, DIB_RGB_COLORS);
+    ReleaseDC(nullptr, hdcScreen);
 
-        // Fill background with a default color
-        RECT rc = { 0, 0, width, height };
-        HBRUSH hBrush = CreateSolidBrush(CLR_DEFAULT);
-        FillRect(hMemDC, &rc, hBrush);
-        DeleteObject(hBrush);
-
-        // Draw the icon
-        DrawIconEx(hMemDC, 0, 0, ahIcon, width, height, 0, nullptr, DI_NORMAL);
-
-        SelectObject(hMemDC, hOldBitmap);
-        DeleteDC(hMemDC);
-    }
-
-    // Cleanup
-    ReleaseDC(nullptr, hdc);
-    DeleteObject(iconInfo.hbmColor);
-    DeleteObject(iconInfo.hbmMask);
-    if (aDestroyIcon) DestroyIcon(ahIcon);
-
-    return hBitmap;
+    if (result == 0) return std::nullopt;
+    return buffer;
 }
-
 
 /**
  * @brief Scales an HBITMAP to a new width and height.
  * @param hBitmap The source bitmap handle.
- * @param newW The target width.
- * @param newH The target height.
- * @return A handle to the new, scaled HBITMAP, or NULL on failure. The caller is responsible for deleting the returned object.
+ * @param newW The new width.
+ * @param newH The new height.
+ * @return A handle to the NEW scaled bitmap on success, or nullptr on failure. The caller is responsible for deleting this bitmap.
  */
-static HBITMAP ScaleBitmap(HBITMAP hBitmap, int newW, int newH) {
+HBITMAP ScaleBitmap(HBITMAP hBitmap, int newW, int newH) {
     if (!hBitmap || newW <= 0 || newH <= 0) return nullptr;
 
     HDC hdcScreen = GetDC(nullptr);
     if (!hdcScreen) return nullptr;
 
-    // Create source DC
     HDC hdcSrc = CreateCompatibleDC(hdcScreen);
-    if (!hdcSrc) {
+    HDC hdcDest = CreateCompatibleDC(hdcScreen);
+    HBITMAP hBitmapDest = CreateCompatibleBitmap(hdcScreen, newW, newH);
+
+    // Cleanup resources if any creation failed.
+    if (!hdcSrc || !hdcDest || !hBitmapDest) {
+        if (hdcSrc) DeleteDC(hdcSrc);
+        if (hdcDest) DeleteDC(hdcDest);
+        if (hBitmapDest) DeleteObject(hBitmapDest);
         ReleaseDC(nullptr, hdcScreen);
         return nullptr;
     }
+
     HBITMAP hOldSrc = (HBITMAP)SelectObject(hdcSrc, hBitmap);
+    HBITMAP hOldDest = (HBITMAP)SelectObject(hdcDest, hBitmapDest);
 
     BITMAP bm;
     GetObject(hBitmap, sizeof(bm), &bm);
-
-    // Create destination DC and bitmap
-    HDC hdcDest = CreateCompatibleDC(hdcScreen);
-    if (!hdcDest) {
-        SelectObject(hdcSrc, hOldSrc);
-        DeleteDC(hdcSrc);
-        ReleaseDC(nullptr, hdcScreen);
-        return nullptr;
-    }
-
-    HBITMAP hBitmapDest = CreateCompatibleBitmap(hdcScreen, newW, newH);
-    if (!hBitmapDest) {
-        DeleteDC(hdcDest);
-        SelectObject(hdcSrc, hOldSrc);
-        DeleteDC(hdcSrc);
-        ReleaseDC(nullptr, hdcScreen);
-        return nullptr;
-    }
-    HBITMAP hOldDest = (HBITMAP)SelectObject(hdcDest, hBitmapDest);
-
-    // Perform the scaling
-    SetStretchBltMode(hdcDest, HALFTONE);
+    SetStretchBltMode(hdcDest, HALFTONE); // Use a high-quality scaling algorithm.
     StretchBlt(hdcDest, 0, 0, newW, newH, hdcSrc, 0, 0, bm.bmWidth, bm.bmHeight, SRCCOPY);
 
-    // Cleanup
+    // Clean up GDI objects.
     SelectObject(hdcSrc, hOldSrc);
     SelectObject(hdcDest, hOldDest);
     DeleteDC(hdcSrc);
@@ -261,559 +284,379 @@ static HBITMAP ScaleBitmap(HBITMAP hBitmap, int newW, int newH) {
 }
 
 /**
- * @brief Loads an image from a file into an HBITMAP, trying various methods.
- * @param sFileImage Path to the image file. Can be an EXE/DLL for icon extraction.
- * @param iWidth Desired width. If -1, aspect ratio is preserved based on iHeight.
- * @param iHeight Desired height. If -1, aspect ratio is preserved based on iWidth.
- * @param iTypeImage Reference to an integer that will receive the image type (e.g., IMAGE_BITMAP).
- * @param iIconNumber The index of the icon to extract if sFileImage is an EXE/DLL.
- * @param bUseGDIPlusIfAvailable If true, attempts to use GDI+ for loading modern image formats.
- * @return A handle to the loaded HBITMAP, or NULL on failure.
+ * @brief Captures a specified rectangular region of the screen into a new HBITMAP.
+ * @param iLeft The left coordinate of the region.
+ * @param iTop The top coordinate of the region.
+ * @param iRight The right coordinate of the region.
+ * @param iBottom The bottom coordinate of the region.
+ * @return A handle to the NEW bitmap containing the screen capture. The caller is responsible for deleting this bitmap.
  */
-static HBITMAP LoadPicture(const char* sFileImage, int iWidth, int iHeight, int& iTypeImage, int iIconNumber, bool bUseGDIPlusIfAvailable) {
-    if (!sFileImage || !sFileImage[0]) return nullptr;
+HBITMAP CaptureScreenRegion(int iLeft, int iTop, int iRight, int iBottom) {
+    int width = iRight - iLeft;
+    int height = iBottom - iTop;
 
-    HBITMAP hBitmap = nullptr;
-    wchar_t wszPath[MAX_PATH];
-    ToWideCharFunc(sFileImage, wszPath, MAX_PATH);
+    HDC hdcScreen = GetDC(nullptr);
+    if (!hdcScreen) return nullptr;
 
-    std::string sFileLower = sFileImage;
-    for (char& c : sFileLower) c = static_cast<char>(tolower(c));
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
 
-    bool isIconFile = sFileLower.ends_with(".ico") || sFileLower.ends_with(".cur");
-    bool isExeFile = sFileLower.ends_with(".exe") || sFileLower.ends_with(".dll");
-
-    // 1. Icon Extraction from EXE/DLL
-    if (iIconNumber > 0 || isExeFile) {
-        HICON hIcon = (HICON)ExtractIcon(nullptr, wszPath, iIconNumber);
-        if (hIcon && hIcon != (HICON)1) {
-            hBitmap = IconToBitmap(hIcon, true);
-            iTypeImage = IMAGE_ICON;
-        }
+    if (!hdcMem || !hBitmap) {
+        if (hdcMem) DeleteDC(hdcMem);
+        if (hBitmap) DeleteObject(hBitmap);
+        ReleaseDC(nullptr, hdcScreen);
+        return nullptr;
     }
 
-    // 2. Standard Image Loading (ICO, CUR, BMP)
-    if (!hBitmap && (isIconFile || sFileLower.ends_with(".bmp"))) {
-        int type = isIconFile ? IMAGE_ICON : IMAGE_BITMAP;
-        hBitmap = (HBITMAP)LoadImageW(nullptr, wszPath, type, 0, 0, LR_LOADFROMFILE);
-        if (hBitmap) {
-            iTypeImage = type;
-            if (type == IMAGE_ICON) {
-                HBITMAP tempBitmap = IconToBitmap((HICON)hBitmap, true);
-                hBitmap = tempBitmap; // hBitmap was an HICON, now it's a real HBITMAP
-            }
-        }
-    }
+    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
+    BitBlt(hdcMem, 0, 0, width, height, hdcScreen, iLeft, iTop, SRCCOPY);
+    SelectObject(hdcMem, hOldBitmap);
 
-    // 3. GDI+ Loading (JPG, GIF, PNG, etc.)
-    if (!hBitmap && bUseGDIPlusIfAvailable) {
-        Gdiplus::GdiplusStartupInput gdiplusStartupInput;
-        ULONG_PTR gdiplusToken;
-        if (Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr) == Gdiplus::Ok) {
-            Gdiplus::Bitmap* image = new Gdiplus::Bitmap(wszPath);
-            if (image && image->GetLastStatus() == Gdiplus::Ok) {
-                image->GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), &hBitmap);
-                iTypeImage = IMAGE_BITMAP;
-            }
-            delete image;
-            Gdiplus::GdiplusShutdown(gdiplusToken);
-        }
-    }
-
-    // 4. OLE Automation Fallback
-    if (!hBitmap) {
-        HANDLE hFile = CreateFileA(sFileImage, GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (hFile != INVALID_HANDLE_VALUE) {
-            DWORD dwFileSize = GetFileSize(hFile, nullptr);
-            if (dwFileSize != INVALID_FILE_SIZE) {
-                HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, dwFileSize);
-                if (hGlobal) {
-                    void* pData = GlobalLock(hGlobal);
-                    if (pData) {
-                        DWORD dwBytesRead;
-                        if (ReadFile(hFile, pData, dwFileSize, &dwBytesRead, nullptr) && dwBytesRead == dwFileSize) {
-                            IStream* pStream = nullptr;
-                            if (CreateStreamOnHGlobal(hGlobal, TRUE, &pStream) == S_OK) {
-                                IPicture* pPicture = nullptr;
-                                if (OleLoadPicture(pStream, 0, FALSE, IID_IPicture, (LPVOID*)&pPicture) == S_OK) {
-                                    OLE_HANDLE ole_h;
-                                    pPicture->get_Handle(&ole_h);
-                                    // FIX: Use a LONG_PTR cast to avoid C4312 warning on x64 builds.
-                                    hBitmap = (HBITMAP)CopyImage((HANDLE)(LONG_PTR)ole_h, IMAGE_BITMAP, 0, 0, LR_COPYRETURNORG);
-                                    pPicture->Release();
-                                    iTypeImage = IMAGE_BITMAP;
-                                }
-                                pStream->Release();
-                            }
-                        }
-                        GlobalUnlock(hGlobal);
-                    }
-                    // Note: CreateStreamOnHGlobal takes ownership of hGlobal, so we don't free it if successful.
-                }
-            }
-            CloseHandle(hFile);
-        }
-    }
-
-    // Handle resizing
-    if (hBitmap && (iWidth != 0 || iHeight != 0)) {
-        BITMAP bm;
-        GetObject(hBitmap, sizeof(bm), &bm);
-        int currentW = bm.bmWidth;
-        int currentH = bm.bmHeight;
-        int newW = iWidth;
-        int newH = iHeight;
-
-        if (iWidth == -1 && iHeight > 0) { // Preserve aspect ratio based on height
-            newH = iHeight;
-            newW = static_cast<int>(round(currentW * (static_cast<float>(newH) / currentH)));
-        }
-        else if (iHeight == -1 && iWidth > 0) { // Preserve aspect ratio based on width
-            newW = iWidth;
-            newH = static_cast<int>(round(currentH * (static_cast<float>(newW) / currentW)));
-        }
-
-        if ((newW > 0 && newH > 0) && (newW != currentW || newH != currentH)) {
-            HBITMAP hScaledBitmap = ScaleBitmap(hBitmap, newW, newH);
-            if (hScaledBitmap) {
-                DeleteObject(hBitmap);
-                hBitmap = hScaledBitmap;
-            }
-        }
-    }
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScreen);
 
     return hBitmap;
 }
 
-/**
- * @brief Extracts the pixel data from an HBITMAP into a vector of COLORREF values.
- * @param ahImage The handle to the source bitmap.
- * @param hdc A handle to a device context.
- * @param iWidth Reference to a LONG that will receive the bitmap's width.
- * @param iHeight Reference to a LONG that will receive the bitmap's height.
- * @param aIs16Bit Reference to a bool that is not used in this implementation but kept for signature compatibility.
- * @param aMinColorDepth Minimum color depth required (not used, always gets 32-bit).
- * @return A std::vector<COLORREF> containing the 32-bpp pixel data in top-down order. Returns an empty vector on failure.
- */
-static std::vector<COLORREF> getbits(HBITMAP ahImage, HDC hdc, LONG& iWidth, LONG& iHeight, bool& aIs16Bit, int aMinColorDepth = 8) {
-    BITMAP bm;
-    if (!GetObject(ahImage, sizeof(BITMAP), &bm)) {
-        return {};
-    }
 
-    iWidth = bm.bmWidth;
-    iHeight = bm.bmHeight;
-    aIs16Bit = false; // We always request 32-bit
+// =================================================================================================
+// #BLOCK# OPTIMIZED SIMD PIXEL COMPARISON (CONSISTENT LOGIC)
+// Contains the core pixel-matching algorithms, including the scalar and AVX2 versions.
+// =================================================================================================
 
-    std::vector<COLORREF> pixels;
-    pixels.resize(iWidth * iHeight);
+namespace PixelComparison {
 
-    BITMAPINFO bmi = { 0 };
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = iWidth;
-    bmi.bmiHeader.biHeight = -iHeight; // Request a top-down DIB
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
+    /**
+     * @brief Performs a pixel-by-pixel comparison with tolerance (standard C++ version).
+     * @return True if all non-transparent pixels are within tolerance, false otherwise.
+     */
+    bool CheckApproxMatch_Scalar(
+        const PixelBuffer& screen, const PixelBuffer& source,
+        int start_x, int start_y, COLORREF transparent_color, int tolerance) noexcept {
 
-    if (GetDIBits(hdc, ahImage, 0, iHeight, pixels.data(), &bmi, DIB_RGB_COLORS) == 0) {
-        return {}; // Return empty vector on failure
-    }
+        for (int y = 0; y < source.height; ++y) {
+            const COLORREF* source_row = &source.pixels[y * source.width];
+            const COLORREF* screen_row = &screen.pixels[(start_y + y) * screen.width + start_x];
 
-    return pixels;
-}
+            for (int x = 0; x < source.width; ++x) {
+                COLORREF source_pixel = source_row[x];
+                if (source_pixel == transparent_color) continue;
 
-/**
- * @brief Checks if a smaller image exists within a larger image at a specific location (exact match).
- * @param pScreenBits Pointer to the start of the larger image (screen) pixel data.
- * @param screenW Width of the screen image.
- * @param pSourceBits Pointer to the start of the smaller image (source) pixel data.
- * @param sourceW Width of the source image.
- * @param sourceH Height of the source image.
- * @param iX The X coordinate in the screen image to start the comparison.
- * @param iY The Y coordinate in the screen image to start the comparison.
- * @param iTransparentColor The COLORREF to treat as transparent (will match any pixel).
- * @return True if the source image is found at the given coordinates, false otherwise.
- */
-static bool CheckExactMatch(const COLORREF* pScreenBits, int screenW, const COLORREF* pSourceBits, int sourceW, int sourceH, int iX, int iY, int iTransparentColor) {
-    for (int y = 0; y < sourceH; ++y) {
-        for (int x = 0; x < sourceW; ++x) {
-            COLORREF sourcePixel = pSourceBits[y * sourceW + x];
-            if (sourcePixel == static_cast<unsigned int>(iTransparentColor)) {
-                continue; // Transparent pixel, skip check
-            }
-            COLORREF screenPixel = pScreenBits[(iY + y) * screenW + (iX + x)];
-            if (sourcePixel != screenPixel) {
-                return false;
+                COLORREF screen_pixel = screen_row[x];
+
+                // Compare each color channel (R, G, B) individually.
+                if (abs((int)GetRValue(source_pixel) - (int)GetRValue(screen_pixel)) > tolerance ||
+                    abs((int)GetGValue(source_pixel) - (int)GetGValue(screen_pixel)) > tolerance ||
+                    abs((int)GetBValue(source_pixel) - (int)GetBValue(screen_pixel)) > tolerance) {
+                    return false;
+                }
             }
         }
+        return true;
     }
-    return true;
-}
 
-/**
- * @brief Checks if a smaller image exists within a larger image at a specific location (approximate match).
- * @param pScreenBits Pointer to the start of the larger image (screen) pixel data.
- * @param screenW Width of the screen image.
- * @param pSourceBits Pointer to the start of the smaller image (source) pixel data.
- * @param sourceW Width of the source image.
- * @param sourceH Height of the source image.
- * @param iX The X coordinate in the screen image to start the comparison.
- * @param iY The Y coordinate in the screen image to start the comparison.
- * @param iTransparentColor The COLORREF to treat as transparent (will match any pixel).
- * @param iTolerance The allowed variance (0-255) for each color channel (R, G, B).
- * @return True if the source image is found at the given coordinates within the tolerance, false otherwise.
- */
-static bool CheckApproxMatch(const COLORREF* pScreenBits, int screenW, const COLORREF* pSourceBits, int sourceW, int sourceH, int iX, int iY, int iTransparentColor, int iTolerance) {
-    for (int y = 0; y < sourceH; ++y) {
-        for (int x = 0; x < sourceW; ++x) {
-            COLORREF sourcePixel = pSourceBits[y * sourceW + x];
-            if (sourcePixel == static_cast<unsigned int>(iTransparentColor)) {
-                continue; // Transparent pixel, skip check
+    /**
+     * @brief Performs a pixel-by-pixel comparison with tolerance (AVX2 optimized version).
+     * This function's logic is designed to be mathematically equivalent to the scalar version.
+     * @return True if all non-transparent pixels are within tolerance, false otherwise.
+     */
+    bool CheckApproxMatch_AVX2(
+        const PixelBuffer& screen, const PixelBuffer& source,
+        int start_x, int start_y, COLORREF transparent_color, int tolerance) noexcept {
+
+        const __m256i v_transparent = _mm256_set1_epi32(static_cast<int>(transparent_color));
+        const __m256i v_rgb_mask = _mm256_set1_epi32(0x00FFFFFF);
+
+        for (int y = 0; y < source.height; ++y) {
+            const COLORREF* source_row = &source.pixels[y * source.width];
+            const COLORREF* screen_row = &screen.pixels[(start_y + y) * screen.width + start_x];
+
+            int x = 0;
+            // Process 8 pixels (256 bits) at a time.
+            for (; x + 7 < source.width; x += 8) {
+                __m256i v_source = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source_row + x));
+
+                // Create a mask to identify which of the 8 pixels are transparent.
+                __m256i v_transparent_mask = _mm256_cmpeq_epi32(v_source, v_transparent);
+
+                // Optimization: If all 8 pixels are transparent, skip this chunk entirely.
+                if (_mm256_testc_si256(v_transparent_mask, _mm256_set1_epi32(-1))) {
+                    continue;
+                }
+
+                __m256i v_screen = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(screen_row + x));
+
+                // Isolate only the RGB channels, ignoring the alpha channel.
+                __m256i v_source_rgb = _mm256_and_si256(v_source, v_rgb_mask);
+                __m256i v_screen_rgb = _mm256_and_si256(v_screen, v_rgb_mask);
+
+                // Calculate the absolute difference for each byte (each R, G, B channel) between source and screen.
+                // _mm256_subs_epu8(a, b) calculates saturation subtraction for unsigned bytes: max(0, a - b)
+                // We calculate diff in both directions and OR them to get the absolute difference.
+                __m256i v_diff1 = _mm256_subs_epu8(v_source_rgb, v_screen_rgb);
+                __m256i v_diff2 = _mm256_subs_epu8(v_screen_rgb, v_source_rgb);
+                __m256i v_abs_diff = _mm256_or_si256(v_diff1, v_diff2);
+
+                // Create a tolerance vector where each byte is the tolerance value.
+                const __m256i v_tolerance8 = _mm256_set1_epi8(static_cast<char>(tolerance));
+
+                // Compare if any channel's absolute difference is greater than the tolerance.
+                // _mm256_cmpgt_epi8 is a signed comparison, so we must handle this carefully.
+                // A simpler way is to subtract tolerance from the difference. If the result is > 0, it failed.
+                // Or, subtract difference from tolerance. If it underflows (becomes non-zero), it failed.
+                __m256i v_check = _mm256_subs_epu8(v_abs_diff, v_tolerance8);
+
+                // v_check will have non-zero bytes where diff > tolerance. We need to see if any of these
+                // non-zero bytes correspond to non-transparent pixels.
+                __m256i v_mismatch = _mm256_andnot_si256(v_transparent_mask, v_check);
+
+                // If there is any mismatch in any of the non-transparent pixels, the test fails.
+                if (!_mm256_testz_si256(v_mismatch, v_mismatch)) {
+                    return false;
+                }
             }
-            COLORREF screenPixel = pScreenBits[(iY + y) * screenW + (iX + x)];
 
-            int sourceR = GetRValue(sourcePixel);
-            int sourceG = GetGValue(sourcePixel);
-            int sourceB = GetBValue(sourcePixel);
-
-            int screenR = GetRValue(screenPixel);
-            int screenG = GetGValue(screenPixel);
-            int screenB = GetBValue(screenPixel);
-
-            if (abs(sourceR - screenR) > iTolerance ||
-                abs(sourceG - screenG) > iTolerance ||
-                abs(sourceB - screenB) > iTolerance) {
-                return false;
+            // Handle any remaining pixels (less than 8) with the scalar code.
+            for (; x < source.width; ++x) {
+                COLORREF source_pixel = source_row[x];
+                if (source_pixel == transparent_color) continue;
+                COLORREF screen_pixel = screen_row[x];
+                if (abs((int)GetRValue(source_pixel) - (int)GetRValue(screen_pixel)) > tolerance ||
+                    abs((int)GetGValue(source_pixel) - (int)GetGValue(screen_pixel)) > tolerance ||
+                    abs((int)GetBValue(source_pixel) - (int)GetBValue(screen_pixel)) > tolerance) {
+                    return false;
+                }
             }
         }
+        return true;
     }
-    return true;
 }
 
+// =================================================================================================
+// #BLOCK# CORE SEARCH ENGINE
+// The main logic that orchestrates the search process.
+// =================================================================================================
+
 /**
- * @brief The core search function. Captures a region of the screen and searches for a given bitmap within it.
- * @param hBitmapSource The HBITMAP of the image to search for.
- * @param iLeft The left coordinate of the search area on the screen.
- * @param iTop The top coordinate of the search area on the screen.
- * @param iRight The right coordinate of the search area on the screen.
- * @param iBottom The bottom coordinate of the search area on the screen.
- * @param iTolerance The color tolerance for an approximate match. If 0, an exact match is performed.
- * @param iTransparent The COLORREF to be treated as transparent.
- * @return A C-string containing "x|y|w|h" on success, an error code like "E<-3>" on failure, or an empty string if no match is found.
+ * @brief Scans a screen buffer for a source image buffer.
+ * @return A vector of MatchResult structs for all found occurrences.
  */
-static char* SearchImageWithBitmap(HBITMAP hBitmapSource, int iLeft, int iTop, int iRight, int iBottom, int iTolerance, int iTransparent) {
-    static char szResult[64];
-    strcpy_s(szResult, "");
+std::vector<MatchResult> SearchForBitmap(
+    const PixelBuffer& screen_buffer, const PixelBuffer& source_buffer,
+    int search_left, int search_top, int tolerance, COLORREF transparent_color,
+    bool find_all) {
 
-    if (!hBitmapSource) return szResult;
-
-    int iSearchWidth = iRight - iLeft;
-    int iSearchHeight = iBottom - iTop;
-    if (iSearchWidth <= 0 || iSearchHeight <= 0) {
-        strcpy_s(szResult, "E<-9>");
-        return szResult;
+    std::vector<MatchResult> matches;
+    if (source_buffer.width > screen_buffer.width || source_buffer.height > screen_buffer.height) {
+        return matches;
     }
 
-    // 1. Get Screen DC and capture screen region
-    HDC hdcScreen = GetDC(nullptr);
-    if (!hdcScreen) { strcpy_s(szResult, "E<-3>"); return szResult; }
+    const int max_x = screen_buffer.width - source_buffer.width;
+    const int max_y = screen_buffer.height - source_buffer.height;
 
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    if (!hdcMem) { ReleaseDC(nullptr, hdcScreen); strcpy_s(szResult, "E<-4>"); return szResult; }
-
-    HBITMAP hBitmapScreen = CreateCompatibleBitmap(hdcScreen, iSearchWidth, iSearchHeight);
-    if (!hBitmapScreen) {
-        DeleteDC(hdcMem);
-        ReleaseDC(nullptr, hdcScreen);
-        strcpy_s(szResult, "E<-5>");
-        return szResult;
-    }
-
-    SelectObject(hdcMem, hBitmapScreen);
-    if (!BitBlt(hdcMem, 0, 0, iSearchWidth, iSearchHeight, hdcScreen, iLeft, iTop, SRCCOPY)) {
-        DeleteObject(hBitmapScreen);
-        DeleteDC(hdcMem);
-        ReleaseDC(nullptr, hdcScreen);
-        strcpy_s(szResult, "E<-7>");
-        return szResult;
-    }
-
-    // 2. Get pixel data for both screen capture and source image
-    LONG screenW, screenH, sourceW, sourceH;
-    bool is16bit_dummy;
-    std::vector<COLORREF> screenBits = getbits(hBitmapScreen, hdcMem, screenW, screenH, is16bit_dummy);
-    std::vector<COLORREF> sourceBits = getbits(hBitmapSource, hdcMem, sourceW, sourceH, is16bit_dummy);
-
-    // Cleanup GDI objects as soon as they are not needed
-    DeleteObject(hBitmapScreen);
-    DeleteDC(hdcMem);
-    ReleaseDC(nullptr, hdcScreen);
-
-    if (screenBits.empty() || sourceBits.empty()) {
-        strcpy_s(szResult, "E<-8>");
-        return szResult;
-    }
-
-    if (sourceW > screenW || sourceH > screenH) {
-        return szResult; // Source image is bigger than search area, no match possible
-    }
-
-    // 3. Perform the search
-    int iMaxX = screenW - sourceW;
-    int iMaxY = screenH - sourceH;
-
-    for (int y = 0; y <= iMaxY; ++y) {
-        for (int x = 0; x <= iMaxX; ++x) {
+    // Iterate through every possible top-left starting position in the screen buffer.
+    for (int y = 0; y <= max_y; ++y) {
+        for (int x = 0; x <= max_x; ++x) {
             bool found = false;
-            if (iTolerance == 0) {
-                found = CheckExactMatch(screenBits.data(), screenW, sourceBits.data(), sourceW, sourceH, x, y, iTransparent);
+            // Dispatch to the appropriate comparison function based on CPU support.
+            if (g_is_avx2_supported) {
+                found = PixelComparison::CheckApproxMatch_AVX2(screen_buffer, source_buffer, x, y, transparent_color, tolerance);
             }
             else {
-                found = CheckApproxMatch(screenBits.data(), screenW, sourceBits.data(), sourceW, sourceH, x, y, iTransparent, iTolerance);
+                found = PixelComparison::CheckApproxMatch_Scalar(screen_buffer, source_buffer, x, y, transparent_color, tolerance);
             }
 
             if (found) {
-                sprintf_s(szResult, sizeof(szResult), "%d|%d|%ld|%ld", iLeft + x, iTop + y, sourceW, sourceH);
-                return szResult;
+                matches.push_back({ search_left + x, search_top + y, source_buffer.width, source_buffer.height });
+                if (!find_all) return matches; // Optimization: if only one is needed, exit immediately.
             }
         }
     }
-
-    return szResult; // Return empty string for "no match"
+    return matches;
 }
 
-
 // =================================================================================================
-// EXPORTED FUNCTION
+// #BLOCK# EXPORTED C API
+// The public-facing function that will be called by external applications.
 // =================================================================================================
 
-/**
- * @brief Searches for one or more images on the screen within a specified region.
- *
- * @param sImageFile A pipe-separated string of image file paths.
- * @param iLeft Left coordinate of the search rectangle. Defaults to 0.
- * @param iTop Top coordinate of the search rectangle. Defaults to 0.
- * @param iRight Right coordinate of the search rectangle. If 0, screen width is used.
- * @param iBottom Bottom coordinate of the search rectangle. If 0, screen height is used.
- * @param iTolerance Color tolerance (0-255). 0 means exact match.
- * @param iTransparent A COLORREF value to treat as transparent.
- * @param iMultiResults The maximum number of results to find. If 0, finds all.
- * @param iCenterPOS If 1, returns the center coordinates of the found image. Otherwise, returns top-left.
- * @param iReturnDebug If 1, appends a debug string with parameter info to the result.
- * @param fMinScale The minimum scaling factor to test (e.g., 0.8 for 80%).
- * @param fMaxScale The maximum scaling factor to test (e.g., 1.2 for 120%).
- * @param fScaleStep The step to increment scale from min to max (e.g., 0.1).
- *
- * @return A formatted string.
- * - Success: "{match_count}[x|y|w|h,x2|y2|w2|h2,...]"
- * - No Match: "{0}[No Match Found]"
- * - Error: "{error_code}[error_message]"
- */
-
-extern "C" __declspec(dllexport) char* WINAPI ImageSearch(
-    char* sImageFile,
+extern "C" __declspec(dllexport) const wchar_t* WINAPI ImageSearch(
+    const wchar_t* sImageFile,
     int iLeft = 0, int iTop = 0, int iRight = 0, int iBottom = 0,
     int iTolerance = 10,
-    int iTransparent = CLR_NONE,
+    int iTransparent = 0xFFFFFFFF,
     int iMultiResults = 0,
     int iCenterPOS = 1,
     int iReturnDebug = 0,
-    float fMinScale = 1.0f, float fMaxScale = 1.0f, float fScaleStep = 0.1f
+    float fMinScale = 1.0f, float fMaxScale = 1.0f, float fScaleStep = 0.1f,
+    int iFindAllOccurrences = 0
 ) {
-    // Convert user-provided RGB transparent color to BGR for GDI comparison.
-    iTransparent = rgb_to_bgr(iTransparent);
+    // Use a large, thread-local static buffer. This is the simplest and most stable way
+    // to return a string to AutoIt. It's safe because the memory persists for the call.
+    thread_local wchar_t g_szAnswer[262144]; // 256 KB buffer
+    g_szAnswer[0] = L'\0';
 
-    // Static buffers for results. Note: This makes the function not thread-safe.
-    static char szAnswer[2048];
-    static char szDebug[1024];
+    // Ensure CPU features are checked at least once.
+    std::call_once(g_cpu_check_flag, InitializeCpuFeatures);
+    std::wstringstream result_stream;
 
-    // --- 1. Parameter Validation and Initialization ---
+    // --- 1. Parameter Validation and Normalization ---
+    iTolerance = std::clamp(iTolerance, 0, 255);
+    fMinScale = std::max(0.1f, fMinScale);
+    fMaxScale = std::max(fMinScale, fMaxScale);
+    fScaleStep = std::max(0.01f, fScaleStep);
+
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-
-    iLeft = max(0, iLeft);
-    iTop = max(0, iTop);
+    iLeft = std::max(0, iLeft);
+    iTop = std::max(0, iTop);
     iRight = (iRight <= 0 || iRight > screenWidth) ? screenWidth : iRight;
     iBottom = (iBottom <= 0 || iBottom > screenHeight) ? screenHeight : iBottom;
+
     if (iLeft >= iRight || iTop >= iBottom) {
-        sprintf_s(szAnswer, sizeof(szAnswer), "{%d}[%s]", -9, GetErrorMessage(-9));
-        return szAnswer;
+        result_stream << L"{" << static_cast<int>(ErrorCode::InvalidSearchRegion) << L"}[" << GetErrorMessage(ErrorCode::InvalidSearchRegion) << L"]";
+        wcscpy_s(g_szAnswer, _countof(g_szAnswer), result_stream.str().c_str());
+        return g_szAnswer;
     }
 
-    iTolerance = max(0, min(255, iTolerance));
-    if (fMinScale <= 0) fMinScale = 0.1f;
-    if (fMaxScale < fMinScale) fMaxScale = fMinScale;
-    if (fScaleStep <= 0) fScaleStep = 0.1f;
+    // --- 2. Screen Capture ---
+    // Note: Screen caching is not implemented in this simplified version but would be a major optimization here.
+    HBITMAP hScreenBitmap = CaptureScreenRegion(iLeft, iTop, iRight, iBottom);
+    if (!hScreenBitmap) {
+        // Assume capture failed due to invalid DC or bitmap creation
+        result_stream << L"{" << static_cast<int>(ErrorCode::FailedToCreateCompatibleBitmap) << L"}[" << GetErrorMessage(ErrorCode::FailedToCreateCompatibleBitmap) << L"]";
+        wcscpy_s(g_szAnswer, _countof(g_szAnswer), result_stream.str().c_str());
+        return g_szAnswer;
+    }
+    auto screen_pixels_opt = GetBitmapPixels(hScreenBitmap);
+    DeleteObject(hScreenBitmap); // Clean up the screen capture immediately.
 
-    std::string results_aggregator;
-    int match_count = 0;
+    if (!screen_pixels_opt) {
+        result_stream << L"{" << static_cast<int>(ErrorCode::FailedToGetBitmapBits) << L"}[" << GetErrorMessage(ErrorCode::FailedToGetBitmapBits) << L"]";
+        wcscpy_s(g_szAnswer, _countof(g_szAnswer), result_stream.str().c_str());
+        return g_szAnswer;
+    }
+    const PixelBuffer& screen_buffer = *screen_pixels_opt;
 
-    // --- 2. Process Multiple Image Files ---
-    std::string files(sImageFile);
-    std::string delimiter = "|";
-    size_t pos = 0;
-    std::string token;
-    while ((pos = files.find(delimiter)) != std::string::npos || !files.empty()) {
-        if (pos != std::string::npos) {
-            token = files.substr(0, pos);
-            files.erase(0, pos + delimiter.length());
-        }
-        else {
-            token = files;
-            files.clear();
-        }
+    // --- 3. Multi-Image & Multi-Scale Search Loop ---
+    std::vector<MatchResult> all_matches;
+    std::wstring file_list_str(sImageFile);
+    std::wstringstream file_stream(file_list_str);
+    std::wstring file_path;
 
-        if (token.empty()) continue;
+    // Split the input string by '|' to search for multiple files.
+    while (std::getline(file_stream, file_path, L'|')) {
+        if (file_path.empty()) continue;
 
-        // --- 3. Load Original Image ---
-        int imageType = 0;
-        HBITMAP hBitmapOrig = LoadPicture(token.c_str(), 0, 0, imageType, 0, true);
-        if (!hBitmapOrig) {
-            sprintf_s(szAnswer, sizeof(szAnswer), "{%d}[%s]", -2, GetErrorMessage(-2));
-            return szAnswer;
-        }
+        HBITMAP hBitmapOrig = LoadImageFromFile(file_path);
+        if (!hBitmapOrig) continue;
 
-        // --- 4. Scaling Loop ---
-        bool foundOnAnyScale = false;
+        // Loop through the specified scale range.
         for (float scale = fMinScale; scale <= fMaxScale; scale += fScaleStep) {
-            HBITMAP hBitmapToSearch = nullptr;
-            bool deleteThisBitmap = false;
-
-            if (scale == 1.0f) {
-                hBitmapToSearch = hBitmapOrig;
-            }
-            else {
+            HBITMAP hBitmapToSearch = hBitmapOrig;
+            bool scaled = false;
+            if (scale != 1.0f) {
                 BITMAP bm;
                 GetObject(hBitmapOrig, sizeof(bm), &bm);
                 int newW = static_cast<int>(round(bm.bmWidth * scale));
                 int newH = static_cast<int>(round(bm.bmHeight * scale));
-
-                if (newW < 1 || newH < 1) {
-                    // Skip scales that result in a 0 or 1 pixel image
-                    continue;
+                if (newW > 0 && newH > 0) {
+                    hBitmapToSearch = ScaleBitmap(hBitmapOrig, newW, newH);
+                    scaled = true;
                 }
-
-                hBitmapToSearch = ScaleBitmap(hBitmapOrig, newW, newH);
-                deleteThisBitmap = true; // We created this scaled bitmap, so we must delete it
-            }
-
-            if (!hBitmapToSearch) {
-                // If scaling failed, just continue to the next scale factor
-                continue;
-            }
-
-            // --- 5. Search with the (potentially scaled) bitmap ---
-            char* pResult = SearchImageWithBitmap(hBitmapToSearch, iLeft, iTop, iRight, iBottom, iTolerance, iTransparent);
-
-            if (pResult && pResult[0] == 'E') { // An error occurred
-                int errCode = atoi(pResult + 2);
-                sprintf_s(szAnswer, sizeof(szAnswer), "{%d}[%s]", errCode, GetErrorMessage(errCode));
-                if (deleteThisBitmap) DeleteObject(hBitmapToSearch);
-                DeleteObject(hBitmapOrig);
-                return szAnswer;
-            }
-
-            if (pResult && pResult[0] != '\0') { // A match was found
-                int x, y, w, h;
-                sscanf_s(pResult, "%d|%d|%d|%d", &x, &y, &w, &h);
-
-                if (iCenterPOS == 1) {
-                    x += w / 2;
-                    y += h / 2;
+                else {
+                    continue; // Skip invalid scales.
                 }
+            }
 
-                char single_result[128];
-                sprintf_s(single_result, sizeof(single_result), "%d|%d|%d|%d", x, y, w, h);
-
-                if (!results_aggregator.empty()) {
-                    results_aggregator += ",";
+            auto source_pixels_opt = GetBitmapPixels(hBitmapToSearch);
+            if (source_pixels_opt) {
+                auto matches = SearchForBitmap(screen_buffer, *source_pixels_opt, iLeft, iTop, iTolerance, RgbToBgr(iTransparent), iFindAllOccurrences != 0);
+                if (!matches.empty()) {
+                    all_matches.insert(all_matches.end(), matches.begin(), matches.end());
+                    if (iFindAllOccurrences == 0) break; // Found for this image, move to next scale.
                 }
-                results_aggregator += single_result;
-                match_count++;
-                foundOnAnyScale = true;
             }
 
-            if (deleteThisBitmap) {
-                DeleteObject(hBitmapToSearch);
-            }
-
-            // If we found a match for this image file, we can stop trying other scales for it.
-            if (foundOnAnyScale) {
-                break;
-            }
+            if (scaled) DeleteObject(hBitmapToSearch);
         }
-
         DeleteObject(hBitmapOrig);
-
-        // Check if we have found enough results overall
-        if (iMultiResults > 0 && match_count >= iMultiResults) {
-            break;
-        }
+        // If we are not finding all occurrences and we found at least one match for this file, stop searching other files.
+        if (iFindAllOccurrences == 0 && !all_matches.empty()) break;
     }
 
-    // --- 6. Format Final Output ---
+    // --- 4. Format Results ---
+    size_t match_count = all_matches.size();
+    if (iMultiResults > 0 && match_count > (size_t)iMultiResults) {
+        match_count = iMultiResults;
+    }
+
     if (match_count > 0) {
-        sprintf_s(szAnswer, sizeof(szAnswer), "{%d}[%s]", match_count, results_aggregator.c_str());
+        std::wstringstream matches_stream;
+        for (size_t i = 0; i < match_count; ++i) {
+            if (i > 0) matches_stream << L",";
+            int x = all_matches[i].x;
+            int y = all_matches[i].y;
+            if (iCenterPOS == 1) {
+                x += all_matches[i].w / 2;
+                y += all_matches[i].h / 2;
+            }
+            matches_stream << x << L"|" << y << L"|" << all_matches[i].w << L"|" << all_matches[i].h;
+        }
+        result_stream << L"{" << match_count << L"}[" << matches_stream.str() << L"]";
     }
     else {
-        sprintf_s(szAnswer, sizeof(szAnswer), "{0}[No Match Found]");
+        result_stream << L"{0}[No Match Found]";
     }
 
+    // --- 5. Append Debug Info if Requested ---
     if (iReturnDebug == 1) {
-        sprintf_s(szDebug, sizeof(szDebug),
-            " | DEBUG: File=%s, Rect=(%d,%d,%d,%d), Tol=%d, Trans=0x%X, Multi=%d, Center=%d, Scale=(%.2f,%.2f,%.2f)",
-            sImageFile, iLeft, iTop, iRight, iBottom, iTolerance, iTransparent, iMultiResults, iCenterPOS, fMinScale, fMaxScale, fScaleStep);
-        strcat_s(szAnswer, sizeof(szAnswer), szDebug);
+        result_stream << L" | DEBUG: File=" << sImageFile
+            << L", Rect=(" << iLeft << L"," << iTop << L"," << iRight << L"," << iBottom << L")"
+            << L", Tol=" << iTolerance
+            << L", Trans=0x" << std::hex << iTransparent << std::dec
+            << L", Multi=" << iMultiResults
+            << L", Center=" << iCenterPOS
+            << L", FindAll=" << iFindAllOccurrences
+            << L", AVX2=" << g_is_avx2_supported.load()
+            << L", Scale=(" << std::fixed << std::setprecision(2) << fMinScale << L"," << fMaxScale << L"," << fScaleStep << L")";
     }
 
-    return szAnswer;
+    // --- 6. Final Copy to Static Buffer ---
+    std::wstring final_string = result_stream.str();
+    if (final_string.length() + 1 > _countof(g_szAnswer)) {
+        // If the result is too large, return a specific error.
+        swprintf_s(g_szAnswer, _countof(g_szAnswer), L"{%d}[%s]", static_cast<int>(ErrorCode::ResultBufferTooSmall), GetErrorMessage(ErrorCode::ResultBufferTooSmall));
+    }
+    else {
+        wcscpy_s(g_szAnswer, _countof(g_szAnswer), final_string.c_str());
+    }
+
+    return g_szAnswer;
+}
+
+/**
+ * @brief DLL Entry Point. Manages process-wide initialization and cleanup.
+ * @param hModule Handle to the DLL module.
+ * @param ul_reason_for_call Reason for calling the function.
+ * @param lpReserved Reserved.
+ * @return TRUE on success.
+ */
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    switch (ul_reason_for_call) {
+    case DLL_PROCESS_ATTACH:
+    {
+        // Initialize GDI+ once when the DLL is loaded into a process.
+        Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+        Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, NULL);
+    }
+    break;
+    case DLL_PROCESS_DETACH:
+        // Shutdown GDI+ when the DLL is unloaded.
+        ///Gdiplus::GdiplusShutdown(g_gdiplusToken);
+        break;
+    }
+    return TRUE;
 }
 
 #pragma managed(pop)
-
-
-// =================================================================================================
-// DEBUG TEST CASE
-// =================================================================================================
-#ifdef _DEBUG
-
-#include <iostream>
-
-// This _tmain function serves as a test harness for the DLL functionality when built in Debug mode.
-// It will not be included in the Release build of the DLL.
-int _tmain(int argc, _TCHAR* argv[]) {
-    _tprintf(_T("--- ImageSearchDLL Debug Test ---\n"));
-
-    // IMPORTANT: For this test to work, you must create a file named "C:\\test_image.png"
-    // or change the path below to an image file that exists on your system.
-    // Also, open that image on your screen so the search can find it.
-    char test_image_path[] = "C:\\test_image.png";
-
-    _tprintf(_T("Searching for image: %s\n"), test_image_path);
-    _tprintf(_T("Please ensure the image is visible on screen for the test to succeed.\n"));
-
-    // Test Case 1: Simple search for a visible image
-    char* result1 = ImageSearch(test_image_path, 0, 0, 0, 0, 10, CLR_NONE, 1, 1, 1);
-    _tprintf(_T("Test 1 (Simple Search): %s\n\n"), result1);
-
-    // Test Case 2: Search for a non-existent file (should return error)
-    char non_existent_file[] = "C:\\path\\to\\non_existent_image.bmp";
-    char* result2 = ImageSearch(non_existent_file);
-    _tprintf(_T("Test 2 (Non-existent file): %s\n\n"), result2);
-
-    // Test Case 3: Search for an image that is not on screen (should return no match)
-    // For this, use a valid image path but make sure the image is NOT visible.
-    char* result3 = ImageSearch(test_image_path, 0, 0, 100, 100); // Search in a small top-left area
-    _tprintf(_T("Test 3 (No Match Expected): %s\n\n"), result3);
-
-    // Test Case 4: Search with scaling
-    _tprintf(_T("Searching for image with scaling (0.8x to 1.2x)...\n"));
-    char* result4 = ImageSearch(test_image_path, 0, 0, 0, 0, 10, CLR_NONE, 1, 1, 0, 0.8f, 1.2f, 0.1f);
-    _tprintf(_T("Test 4 (Scaling Search): %s\n\n"), result4);
-
-    system("pause");
-    return 0;
-}
-
-#endif // _DEBUG

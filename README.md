@@ -1,199 +1,160 @@
-# **ImageSearch UDF for AutoIt**
+# **High-Performance ImageSearch UDF & DLL for AutoIt**
 
-## **Overview**
+This project provides a highly optimized UDF (User Defined Function) and two versions of a DLL (Dynamic-Link Library) for fast and flexible image searching on the screen using AutoIt.
 
-This is a powerful, high-performance User Defined Function (UDF) for AutoIt designed to find images on the screen. It leverages a custom DLL for processing, making it significantly faster than native AutoIt pixel/image search functions.
+It serves as a powerful replacement for standard image search functions, delivering superior speed, especially on modern CPUs, by leveraging advanced SIMD instructions.
 
-The UDF is designed to be robust, flexible, and easy to integrate. A key feature is its hybrid DLL loading mechanism, which makes the script self-contained and simple to distribute.
+## **✨ Key Features**
 
-**Author:** Dao Van Trong \- TRONG.PRO
+* **Superior Speed:** The modern version utilizes the **AVX2** instruction set to accelerate the search speed by several factors compared to traditional methods.  
+* **Two DLL Versions:** Provides both a modern version (optimized for speed) and a legacy version (for Windows XP support).  
+* **Multi-Image Search:** Search for multiple image files in a single function call by separating paths with a pipe (|).  
+* **Multi-Scale Searching:** Automatically search for an image across a range of sizes (e.g., from 80% to 120% of its original size).  
+* **Color Tolerance:** Find images even with slight color variations by setting a tolerance value (0-255).  
+* **Transparent Color Support:** Specify a color in the source image to be ignored during the search.  
+* **Flexible Result Handling:**  
+  * Find and return the first match.  
+  * Find and return all matches on the screen.  
+  * Limit the maximum number of results.  
+* **Smart (Hybrid) DLL Loading:** The UDF prioritizes an external DLL for maximum performance and automatically falls back to an embedded DLL to ensure the script always runs.  
+* **Unicode Support:** Works flawlessly with file paths containing Unicode characters.  
+* **Thread-Safe:** The DLL is designed to operate stably in multi-threaded scenarios.  
+* **Debug Information:** Provides an option to return a detailed debug string for easy troubleshooting.
 
-**Version:** 2025.07.22
+## **🚀 The Two DLL Versions**
 
-## **Features**
+The project offers two DLL versions to meet different needs:
 
-* **High-Speed Searching**: Utilizes a pre-compiled DLL (x86 and x64) for rapid image recognition, making it ideal for automation tasks that require speed.  
-* **Hybrid DLL Loading**: The UDF intelligently prioritizes a local DLL in the script's directory but will fall back to a self-contained, embedded version if the local file is not found. This means you only need to include the UDF file in your project.  
-* **Region Searching**: Search the entire screen or specify a precise rectangular area to improve performance and accuracy.  
-* **Color Tolerance**: Find images that are not a perfect match by specifying a tolerance value for color variations.  
-* **Image Scaling**: Detect images that have been resized on the screen by specifying a range of scaling factors to test (e.g., find an icon at 80% to 120% of its original size).  
-* **Multiple Image Search**: Search for multiple images in a single command. The function can return the location of the first image found or all occurrences of all specified images.  
-* **Detailed Return Values**: Returns a structured array with the count and coordinates of found images. Supports both single (1D array) and multiple (2D array) result formats.  
-* **Robust Error Handling**: Sets AutoIt's @error macro with specific codes to easily diagnose failed searches.  
-* **Automatic Cleanup**: When using the embedded DLL, the temporary file is automatically deleted when the script exits.
+### **1\. ImageSearch\_x86.dll ImageSearch\_x64.dll (Modern Version)**
+(Attached in the same UDF folder - Because the DLL file with AVX2 support is large in size)
+This is the recommended version for most users.
 
-## **How It Works: Hybrid DLL Loading**
+* **Strengths:**  
+  * **AVX2 Support:** Leverages Advanced Vector Extensions 2 on modern CPUs to process multiple pixels in parallel, resulting in extremely fast search speeds.  
+  * Built with modern C++, ensuring stability and efficiency.  
+* **Limitations:**  
+  * Not compatible with Windows XP.  
+* **When to use:** When you need maximum performance on Windows 7, 8, 10, 11, and newer.
 
-The UDF uses a smart "hybrid" approach to manage its core DLL:
+### **2\. ImageSearch\_XP.dll (Legacy Version)**
+(Embedded in UDF code)
+This version is created for backward compatibility.
 
-1. **Local DLL Priority**: It first checks for ImageSearch\_x64.dll or ImageSearch\_x86.dll in the same directory as your script (@ScriptDir). This allows you to easily update the DLL without modifying the UDF code.  
-2. **Embedded Fallback**: If no local DLL is found, the UDF automatically extracts an embedded, hex-encoded version of the DLL into the user's temporary directory (@TempDir) and loads it from there.  
-3. **Cleanup**: The temporary DLL is automatically removed upon script exit, ensuring no unnecessary files are left on the system.
+* **Strengths:**  
+  * **Windows XP Compatibility:** Works well on the Windows XP (SP3) operating system.  
+* **Limitations:**  
+  * **No AVX2 Support:** Search speed will be significantly slower than the modern version on AVX2-supported CPUs.  
+* **When to use:** When your script must run in a Windows XP environment.
 
-## **Functions Reference**
+## **⚙️ How the UDF Works**
 
-### **\_ImageSearch()**
+The ImageSearch\_UDF.au3 file uses a very smart "hybrid" DLL loading mechanism:
 
-Searches for an image on the entire screen. This is a simplified wrapper for \_ImageSearch\_Area.
+1. **Prioritize External DLL:** When the \_ImageSearch function is called, the UDF first looks for ImageSearch\_x86.dll and ImageSearch\_x64.dll in the same directory as the script (@ScriptDir). If found, it uses this file to achieve the best performance (with AVX2 if available).  
+2. **Fallback to Embedded DLL:** If the external DLL is not found, the UDF will automatically extract and use a **legacy (non-AVX2) compatible** DLL version that is embedded within it as a hex string.
 
-Syntax:  
-\_ImageSearch($sImagePath\[, $iTolerance \= 0\[, $iCenterPos \= 1\[, $iTransparent \= \-1\[, $bReturn2D \= False\]\]\]\])
+➡️ **This ensures that your script can always run**, even if you forget to copy the DLL file. However, for the highest speed, always place the modern ImageSearch\_x86.dll and ImageSearch\_x64.dll next to your script.
 
-* $sImagePath: The full path to the image file to search for.  
-* $iTolerance (Optional): The allowed tolerance for color variation (0-255). 0 is an exact match. Default is 0\.  
-* $iCenterPos (Optional): If 1, returns the center coordinates of the found image. If 0, returns the top-left coordinates. Default is 1\.  
-* $iTransparent (Optional): A color to treat as transparent (e.g., 0xFF00FF). Default is \-1 (none).  
-* $bReturn2D (Optional): If True, returns a 2D array with all matches. If False, returns a 1D array with the first match. Default is False.
+## **📦 Setup**
 
-**Return Value:**
+1. **Place the DLL file:** Copy ImageSearch\_x86.dll and ImageSearch\_x64.dll (the modern version) into the same directory as your AutoIt script file. 
+2. **Include the UDF in your script:** Use the line \#include \<ImageSearch\_UDF.au3\> in your script.
 
-* **Success**:  
-  * If $bReturn2D is False: A 1D array \[match\_count, x, y\].  
-  * If $bReturn2D is True: A 2D array where \[0\]\[0\] is the match count. Each subsequent row is \[index, x, y, width, height\].  
-* **Failure**: An array where the first element is an error code (\<= 0).
+## **📖 API Reference**
 
-### **\_ImageSearch\_Area()**
+The main function for performing an image search.
 
-Searches for an image within a specified rectangular area of the screen. This is the core function with all available options.
+### **\_ImageSearch($sImageFile, \[$iLeft \= 0\], \[$iTop \= 0\], \[$iRight \= 0\], \[$iBottom \= 0\], \[$iTolerance \= 10\], \[$iTransparent \= 0xFFFFFFFF\], \[$iMultiResults \= 0\], \[$iCenterPOS \= 1\], \[$iReturnDebug \= 0\], \[$fMinScale \= 1.0\], \[$fMaxScale \= 1.0\], \[$fScaleStep \= 0.1\], \[$iFindAllOccurrences \= 0\])**
 
-Syntax:  
-\_ImageSearch\_Area($sImageFile\[, $iLeft \= 0\[, $iTop \= 0\[, $iRight \= @DesktopWidth\[, $iBottom \= @DesktopHeight\[, ...\]\]\]\]\])
+**Parameters**
 
-* $sImageFile: The full path to the image file. Multiple paths can be provided, separated by |.  
-* $iLeft, $iTop, $iRight, $iBottom (Optional): The coordinates of the search area.  
-* $iTolerance (Optional): Color variation tolerance (0-255).  
-* $iTransparent (Optional): Transparent color value.  
-* $iMultiResults (Optional): The maximum number of results to find. Default is 1\.  
-* $iCenterPos (Optional): Return center (1) or top-left (0) coordinates.  
-* $fMinScale, $fMaxScale (Optional): The minimum and maximum scaling factors to test (e.g., 0.8 for 80%, 1.2 for 120%). Default is 1.0.  
-* $fScaleStep (Optional): The step to increment the scale from min to max. Default is 0.1.  
-* $bReturn2D (Optional): Return a 2D array with all matches (True) or a 1D array with the first match (False).
+| Parameter | Type | Default | Description |
+| :---- | :---- | :---- | :---- |
+| $sImageFile | String | \- | Path to the image file. To search for multiple images, separate paths with a pipe (\` |
+| $iLeft | Int | 0 | The left coordinate of the search area. 0 defaults to the entire screen. |
+| $iTop | Int | 0 | The top coordinate of the search area. 0 defaults to the entire screen. |
+| $iRight | Int | 0 | The right coordinate of the search area. 0 defaults to the entire screen. |
+| $iBottom | Int | 0 | The bottom coordinate of the search area. 0 defaults to the entire screen. |
+| $iTolerance | Int | 10 | Color tolerance (0-255). A higher value allows for greater color variation. |
+| $iTransparent | Int | 0xFFFFFFFF | The color (in 0xRRGGBB format) to be ignored in the source image. 0xFFFFFFFF means no transparency. |
+| $iMultiResults | Int | 0 | The maximum number of results to return. 0 means no limit. |
+| $iCenterPOS | Bool | 1 (True) | If True, the returned X/Y coordinates will be the center of the found image. If False, they will be the top-left corner. |
+| $iReturnDebug | Bool | 0 (False) | If True, the function returns a debug string instead of the results array. |
+| $fMinScale | Float | 1.0 | The minimum scaling factor for the search (e.g., 0.8 for 80%). Must be \>= 0.1. |
+| $fMaxScale | Float | 1.0 | The maximum scaling factor for the search (e.g., 1.2 for 120%). |
+| $fScaleStep | Float | 0.1 | The increment to use when searching between min and max scales. Must be \>= 0.01. |
+| $iFindAllOccurrences | Bool | 0 (False) | If False, the search stops after the first match. If True, it finds all possible matches. |
 
-**Return Value:**
+**Return Value**
 
-* Same as \_ImageSearch().
+* **On Success:** Returns a 2D array containing the coordinates of the found images.  
+  * $aResult\[0\]\[0\] \= The number of matches found.  
+  * $aResult\[1\] to $aResult\[$aResult\[0\]\[0\]\] \= An array for each match.  
+  * $aResult\[$i\]\[0\] \= X coordinate  
+  * $aResult\[$i\]\[1\] \= Y coordinate  
+  * $aResult\[$i\]\[2\] \= Width of the found image  
+  * $aResult\[$i\]\[3\] \= Height of the found image  
+* **On Failure / No Match:** Sets @error to 1 and returns 0\.  
+* **In Debug Mode:** If $iReturnDebug is True, returns a string containing detailed information about the last search operation.
 
-### **\_ImageSearch\_Wait() & \_ImageSearch\_WaitArea()**
+## **💻 Examples**
 
-These functions repeatedly perform an image search until the image is found or a timeout occurs.
+### **Example 1: Basic Search**
 
-Syntax:  
-\_ImageSearch\_Wait($iTimeOut, $sImagePath, ...)  
-\_ImageSearch\_WaitArea($iTimeOut, $sImageFile, ...)
+Find the first occurrence of button.png on the screen.
+```
+\#include \<ImageSearch\_UDF.au3\>
 
-* $iTimeOut: The maximum time to wait, in milliseconds.  
-* The remaining parameters are identical to \_ImageSearch() and \_ImageSearch\_Area() respectively.
+Local $aResult \= \_ImageSearch("C:\\images\\button.png")
 
-**Return Value:**
-
-* Returns the result of the first successful find, or the last result (indicating failure) if the timeout is reached.
-
-## **Usage Examples**
-
-### **Quick Start**
-
-To use the UDF, simply include it in your script.
-
-\#include "ImageSearch\_UDF.au3"
-
-; Path to the image you want to find  
-Local $imagePath \= "path\\to\\your\\image.bmp"
-
-; Search for the image on the entire screen  
-Local $result \= \_ImageSearch($imagePath)
-
-; Check if the image was found  
-If $result\[0\] \> 0 Then  
-    ; $result\[1\] \= X coordinate, $result\[2\] \= Y coordinate  
-    ConsoleWrite("Image found at: " & $result\[1\] & ", " & $result\[2\] & @CRLF)  
-    MouseMove($result\[1\], $result\[2\])  
+If @error Then  
+    MsgBox(48, "Error", "Image not found on screen.")  
 Else  
-    ConsoleWrite("Image not found. @error: " & @error & @CRLF)  
+    Local $iCount \= $aResult\[0\]\[0\]  
+    Local $iX \= $aResult\[1\]\[0\]  
+    Local $iY \= $aResult\[1\]\[1\]  
+    MsgBox(64, "Success", "Found " & $iCount & " image(s). First match is at: " & $iX & ", " & $iY)  
+    MouseMove($iX, $iY, 20\) ; Move mouse to the center of the found image  
 EndIf
+```
+### **Example 2: Advanced Search (Multiple Images, Tolerance, Scaling)**
 
-### **Example 1: Searching in a Specific Area**
+Search for icon1.png or icon2.png within a specific region, with a tolerance of 20 and scaling from 90% to 110%. Find all occurrences.
+```
+\#include \<ImageSearch\_UDF.au3\>
 
-This example searches for an image only in the top-left 800x600 area of the screen.
+Local $sImages \= "icon1.png|icon2.png"  
+Local $iTolerance \= 20  
+Local $fMinScale \= 0.9  
+Local $fMaxScale \= 1.1  
+Local $fStep \= 0.05
 
-\#include "ImageSearch\_UDF.au3"
+Local $aResult \= \_ImageSearch($sImages, 500, 300, 1200, 800, $iTolerance, 0xFFFFFFFF, 0, True, False, $fMinScale, $fMaxScale, $fStep, True)
 
-Local $imagePath \= "path\\to\\image.bmp"  
-Local $iLeft \= 0, $iTop \= 0, $iRight \= 800, $iBottom \= 600
+If @error Then  
+    MsgBox(48, "Error", "No matching images found in the specified region.")  
+Else  
+    Local $iCount \= $aResult\[0\]\[0\]  
+    ConsoleWrite("Found " & $iCount & " total matches." & @CRLF)
 
-Local $result \= \_ImageSearch\_Area($imagePath, $iLeft, $iTop, $iRight, $iBottom)
-
-If $result\[0\] \> 0 Then  
-    ConsoleWrite("Image found in the specified area at: " & $result\[1\] & ", " & $result\[2\] & @CRLF)  
-EndIf
-
-### **Example 2: Searching for Multiple Images with Scaling**
-
-This example searches for either Search\_1.bmp or Search\_2.bmp. It also checks for scaled versions of the images between 80% and 120% of their original size and returns all found matches.
-
-\#include "ImageSearch\_UDF.au3"
-
-Local $image1 \= "Search\_1.bmp"  
-Local $image2 \= "Search\_2.bmp"  
-Local $imageList \= $image1 & '|' & $image2
-
-; The last parameter (1) sets $bReturn2D to True  
-Local $aResult \= \_ImageSearch\_Area($imageList, 0, 0, @DesktopWidth, @DesktopHeight, 0, \-1, 99, 1, 1, 0.8, 1.2, 0.1, 1\)
-
-If $aResult\[0\]\[0\] \> 0 Then  
-    ConsoleWrite("Found " & $aResult\[0\]\[0\] & " total matches." & @CRLF)  
-    For $i \= 1 To $aResult\[0\]\[0\]  
-        Local $x \= $aResult\[$i\]\[1\]  
-        Local $y \= $aResult\[$i\]\[2\]  
-        ConsoleWrite("Match " & $i & " found at: " & $x & ", " & $y & @CRLF)  
+    For $i \= 1 To $iCount  
+        ConsoleWrite("Match \#" & $i & ": X=" & $aResult\[$i\]\[0\] & ", Y=" & $aResult\[$i\]\[1\] & ", W=" & $aResult\[$i\]\[2\] & ", H=" & $aResult\[$i\]\[3\] & @CRLF)  
     Next  
-Else  
-    ConsoleWrite("No images found." & @CRLF)  
 EndIf
+```
+### **Example 3: Using Debug Mode**
 
-### **Example 3: Using Color Tolerance**
+To diagnose issues, use the $iReturnDebug parameter.
+```
+\#include \<ImageSearch\_UDF.au3\>
 
-This example searches for an image, allowing for a color variation of up to 20\. This is useful if the image on screen has slight compression artifacts or color differences.
+Local $sDebugInfo \= \_ImageSearch("image\_not\_exist.png", 0, 0, 0, 0, 10, 0xFFFFFFFF, 0, True, True)
 
-\#include "ImageSearch\_UDF.au3"
+; The return value is now a string  
+ConsoleWrite($sDebugInfo & @CRLF)  
+; Example output: {0}\[No Match Found\] | DEBUG: File=image\_not\_exist.png, Rect=(0,0,1920,1080), Tol=10, Trans=0xffffffff, Multi=0, Center=1, FindAll=0, AVX2=true, Scale=(1.00,1.00,0.10)
+```
 
-Local $imagePath \= "path\\to\\image.bmp"
+## **Credits**
 
-; Search with a tolerance of 20  
-Local $result \= \_ImageSearch($imagePath, 20\)
-
-If $result\[0\] \> 0 Then  
-    ConsoleWrite("Image found with tolerance at: " & $result\[1\] & ", " & $result\[2\] & @CRLF)  
-EndIf  
-
-
-
-## **API Reference**
-
-### **ImageSearch.DLL**
-
-char\* WINAPI ImageSearch(  
-    char\* sImageFile,  
-    int iLeft, int iTop, int iRight, int iBottom,  
-    int iTolerance, int iTransparent,  
-    int iMultiResults, int iCenterPOS, int iReturnDebug,  
-    float fMinScale, float fMaxScale, float fScaleStep  
-);
-
-**Parameters:**
-
-* sImageFile (char\*): A pipe-separated (|) string of image file paths to search for.  
-* iLeft, iTop, iRight, iBottom (int): The coordinates of the search rectangle. If iRight or iBottom is 0, the screen width/height is used.  
-* iTolerance (int): The color tolerance (0-255). 0 means an exact match.  
-* iTransparent (int): A COLORREF value (e.g., 0xRRGGBB) to be treated as transparent. Use CLR\_NONE if not needed.  
-* iMultiResults (int): The maximum number of results to find. If 0, finds all.  
-* iCenterPOS (int): If 1, returns the center coordinates of the found image. Otherwise, returns the top-left corner.  
-* iReturnDebug (int): If 1, appends a debug string to the result.  
-* fMinScale, fMaxScale, fScaleStep (float): The scaling factors to test (e.g., 0.8, 1.2, 0.1).
-
-**Return Value:**
-
-A static char\* pointer to a formatted string.
-
-* **Success**: "{match\_count}\[x|y|w|h,x2|y2|w2|h2,...\]"  
-* **No Match**: "{0}\[No Match Found\]"  
-* **Error**: "{error\_code}\[error\_message\]"
+* **Author:** Dao Van Trong \- TRONG.PRO  
